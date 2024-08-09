@@ -28,7 +28,8 @@ namespace RabbitChannel {
 
         void* _callbackClass;
         MsgCallback _msgCallback;
-        const std::string _queueName;
+        const std::string _clientName;
+        const std::string _consumerQueue;
 
 
         amqp_connection_state_t _connectionStatus;

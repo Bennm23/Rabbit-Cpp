@@ -12,10 +12,8 @@ std::string RabbitMQChannel::VHOST = "/";
 
 
 RabbitMQChannel::RabbitMQChannel(const std::string &clientName, MsgCallback callback, void* callbackClass)
-    : _msgCallback(callback), _callbackClass(callbackClass), _queueName(clientName + "_consumer")
+    : _msgCallback(callback), _callbackClass(callbackClass), _clientName(clientName), _consumerQueue(clientName + "_consumer")
 {
-    std::cout << "INIT QUEUE = " << _queueName << std::endl;
-
     connect();
     setupQueue();
 }
@@ -64,10 +62,10 @@ void RabbitMQChannel::connect()
     }
 
 
-    //passive - if true throw error if exchange does not exist. if false, create exchange if it doesn't exist
-    //durable - exchange survives server restart
+    //passive     - if true throw error if exchange does not exist. if false, create exchange if it doesn't exist
+    //durable     - exchange survives server restart
     //auto_delete - delete exchange when last queue is unbound
-    //internal - if true exchange is only used for routing, consumers can not publish on.
+    //internal    - if true exchange is only used for routing, consumers can not publish on.
     amqp_exchange_declare(
         _connectionStatus, _publishChannel, amqp_cstring_bytes(EXCHANGE.c_str()), amqp_cstring_bytes("topic"),
         //passive, durable, auto_delete, internal
@@ -75,25 +73,25 @@ void RabbitMQChannel::connect()
     );
     reply = amqp_get_rpc_reply(_connectionStatus);
     if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
-        std::cerr << "Failed to declare exchange for queue: " << _queueName << ": " << amqp_error_string2(reply.reply.id) << std::endl;
+        std::cerr << "Failed to declare exchange for client: " << _clientName << ": " << amqp_error_string2(reply.reply.id) << std::endl;
         return;
     }
 }
 
 void RabbitMQChannel::setupQueue()
 {
-    //passive - if true do nothing if queue does not exist. if false, create queue if it doesn't exist
-    //durable - queue survives server restart
-    //exclusive - an exclusive queue is a queue that is used only by the connection that created it
+    //passive     - if true do nothing if queue does not exist. if false, create queue if it doesn't exist
+    //durable     - queue survives server restart
+    //exclusive   - an exclusive queue is a queue that is used only by the connection that created it
     //auto_delete - delete queue when no consumers are attached to it
     amqp_queue_declare(
-        _connectionStatus, _consumeChannel, amqp_cstring_bytes(_queueName.c_str()),
-        //passive, durable, exclusivem auto_delete 
+        _connectionStatus, _consumeChannel, amqp_cstring_bytes(_consumerQueue.c_str()),
+        //passive, durable, exclusive, auto_delete 
         false, false, true, true, amqp_empty_table
     );
     amqp_rpc_reply_t reply = amqp_get_rpc_reply(_connectionStatus);
     if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
-        std::cerr << "Failed to declare queue: " << amqp_error_string2(reply.reply.id) << std::endl;
+        std::cerr << "Client(" << _clientName << ") Failed to declare queue: " << amqp_error_string2(reply.reply.id) << std::endl;
         return;
     }
 
@@ -102,11 +100,11 @@ void RabbitMQChannel::setupQueue()
 void RabbitMQChannel::subscribe(const std::string &topic)
 {
     amqp_queue_bind(
-        _connectionStatus, _consumeChannel, amqp_cstring_bytes(_queueName.c_str()),
+        _connectionStatus, _consumeChannel, amqp_cstring_bytes(_consumerQueue.c_str()),
         amqp_cstring_bytes(EXCHANGE.c_str()), amqp_cstring_bytes(topic.c_str()), amqp_empty_table);
     amqp_rpc_reply_t reply = amqp_get_rpc_reply(_connectionStatus);
     if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
-        std::cerr << "Failed to bind queue: " << amqp_error_string2(reply.reply.id) << std::endl;
+        std::cerr << "Client(" << _clientName << ") Failed to bind queue: " << amqp_error_string2(reply.reply.id) << std::endl;
         return;
     }
 }
@@ -124,9 +122,8 @@ void RabbitMQChannel::publish(const std::string& topic, const std::string &messa
     );
 
     amqp_rpc_reply_t reply = amqp_get_rpc_reply(_connectionStatus);
-    std::cout << "Published Message = " << message << " To Topic = " << topic << std::endl;
     if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
-        std::cerr << "Failed to publish message: " << amqp_error_string2(reply.reply.id) << std::endl;
+        std::cerr << "Client(" << _clientName << ") Failed to publish message: " << amqp_error_string2(reply.reply.id) << std::endl;
     }
 }
 
@@ -137,7 +134,7 @@ void RabbitMQChannel::runInForeground()
     //exclusive - when true, the queue is only used by this consumer when this consumer is diconnected the queue will be deleted
     amqp_basic_consume(
         _connectionStatus, _consumeChannel,
-        amqp_cstring_bytes(_queueName.c_str()), amqp_cstring_bytes(""),
+        amqp_cstring_bytes(_consumerQueue.c_str()), amqp_cstring_bytes(""),
         //no-local, no-ack, exclusive
         true, true, true, amqp_empty_table
     );
@@ -159,7 +156,7 @@ void RabbitMQChannel::runInForeground()
         }
         else
         {
-            std::cerr << "Queue: " << _queueName << " Failed to consume message: " << amqp_error_string2(reply.reply.id) << std::endl;
+            std::cerr << "Queue: " << _consumerQueue << " Failed to consume message: " << amqp_error_string2(reply.reply.id) << std::endl;
             return;
         }
     }
@@ -169,25 +166,3 @@ void RabbitMQChannel::runInBackground()
 {
     std::thread{&RabbitMQChannel::runInForeground, this}.detach();
 }
-
-// bool RabbitMQManager::startConsuming(const std::string& queueName, std::function<void(const std::string&)> callback) {
-    // amqp_basic_consume(conn_, consume_channel_, amqp_cstring_bytes(queueName.c_str()), amqp_cstring_bytes(""), 0, 1, 0, amqp_empty_table);
-//     amqp_rpc_reply_t reply = amqp_get_rpc_reply(conn_);
-//     if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
-//         std::cerr << "Failed to start consuming: " << amqp_error_string2(reply.reply.id) << std::endl;
-//         return false;
-//     }
-
-//     while (true) {
-//         amqp_envelope_t envelope;
-//         amqp_rpc_reply_t reply = amqp_consume_message(conn_, &envelope, nullptr, 0);
-//         if (reply.reply_type == AMQP_RESPONSE_NORMAL) {
-//             std::string message((char*)envelope.message.body.bytes, envelope.message.body.len);
-//             callback(message);
-//             amqp_destroy_envelope(&envelope);
-//         } else {
-//             std::cerr << "Failed to consume message: " << amqp_error_string2(reply.reply.id) << std::endl;
-//             return false;
-//         }
-//     }
-// }
